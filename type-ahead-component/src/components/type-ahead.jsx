@@ -1,44 +1,65 @@
 import React from 'react'
 
-const TypeAhead = ({ data = [], placeholder = 'Search here', onSelect }) => {
+const TypeAhead = ({ fetchSuggestions, placeholder = 'Search here', onSelect }) => {
     const [query, setQuery] = React.useState('');
 
     const [filteredData , setFilteredData ] = React.useState([])
     const [isOpen , setIsOpen] = React.useState(false)
+    const [isLoading, setIsLoading] = React.useState(false)
+    const [error, setError] = React.useState(null)
     const [activeIndex, setActiveIndex] = React.useState(-1)
 
     const containerRef = React.useRef(null)
 
-    const fuzzyMatch = (text, query) => {
-        const pattern = query.split("").map((char) => char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").join(".*"));
-        return new RegExp(pattern , 'i').test(text);
-    }
-
-    // filter logic
+    // debounced API search
 
     React.useEffect (() => {
         if (query.trim() === '') {
             setFilteredData([])
             setIsOpen(false);
+            setIsLoading(false)
+            setError(null)
             return;
         }
 
-        const results = data.filter(item => item.toLowerCase().includes(query));
-        setFilteredData(results)
-        setIsOpen(true)
-    } , [query,data])
+        const controller = new AbortController()
+
+        const timer = setTimeout(() => {
+            setIsLoading(true)
+            setError(null)
+            fetchSuggestions(query, { signal: controller.signal })
+                .then((results) => {
+                    if (controller.signal.aborted) return
+                    setFilteredData(results)
+                })
+                .catch((err) => {
+                    if (err.name === 'AbortError' || controller.signal.aborted) return
+                    setFilteredData([])
+                    setError(err.message || 'Something went wrong')
+                })
+                .finally(() => {
+                    if (controller.signal.aborted) return
+                    setIsLoading(false)
+                })
+        }, 300)
+
+        return () => {
+            clearTimeout(timer)
+            controller.abort()
+        }
+    } , [query, fetchSuggestions])
 
     // click out side logic
 
     React.useEffect( () => {
         const handleClickOutside = (event) => {
-          if (containerRef.current.contains(event.target)){
+          if (containerRef.current && !containerRef.current.contains(event.target)){
             setIsOpen(false)
           }
         }
 
         document.addEventListener('mousedown', handleClickOutside);
-        return() => removeEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
 
     },[]);
 
@@ -48,8 +69,10 @@ const TypeAhead = ({ data = [], placeholder = 'Search here', onSelect }) => {
         if (!isOpen) return;
 
         if(e.key === 'ArrowDown') {
+            e.preventDefault();
             setActiveIndex(prev => prev < filteredData.length - 1 ? prev + 1 : prev)
         } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
             setActiveIndex(prev => prev > 0 ? prev - 1: prev)
         } else if (e.key === 'Enter' && activeIndex >= 0 ) {
             handleSelect(filteredData[activeIndex])
@@ -69,7 +92,7 @@ const TypeAhead = ({ data = [], placeholder = 'Search here', onSelect }) => {
     }
 
     return (
-        <div className='relative w-full max-w-md'>
+        <div className='relative w-full max-w-md' ref={containerRef}>
             <input
                 type='text'
                 placeholder={placeholder}
@@ -78,18 +101,35 @@ const TypeAhead = ({ data = [], placeholder = 'Search here', onSelect }) => {
                 onChange={(e) => {
                     setQuery(e.target.value); 
                     setActiveIndex(-1)
+                    setIsOpen(true)
                 }}
                 className='w-full px-4 py-3 rounded-xl border border-gray-200 bg-white shadow-lg focus:outline-none focus:ring-2 focus:ring-blue-500
                 focus:border-transparent transition-all duration-200 ease-in-out'
             />
 
             {
-                isOpen && filteredData.length > 0 && (
+                isOpen && (isLoading || error || filteredData.length > 0) && (
                     <ul className='absolute z-50 mt-2 w-full bg-white rounded-xl shadow-lg border border-gray-100 max-h-60 '>
                 {
+                    isLoading ? (
+                        <li className='px-4 py-2 text-gray-400'>Loading...</li>
+                    ) : error ? (
+                        <li className='px-4 py-2 text-red-500'>{error}</li>
+                    ) : (
                     filteredData.map((item, index) => (
-                        <li className='px-4 py-2 cursor-pointer transition-all duration-150' key={index}>{item}</li>
+                        <li 
+                        className={`px-4 py-2 cursor-pointer transition-all duration-150 ${
+                            activeIndex === index ? 'bg-blue-500 text-white' : ''
+                          }`} 
+                        key={index}
+                        onMouseDown={(e) =>{
+                            e.preventDefault();
+                            handleSelect(item);
+                        }}
+                        
+                        >{item}</li>
                     ))
+                    )
                 }
             </ul>
                 )
